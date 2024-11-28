@@ -6,14 +6,16 @@ import numpy as np
 import plotly.graph_objects as go
 import ast
 
-def process_normal(f_in, f_out):
+def process_normal(f_in, f_out, exclude_failed_training=True):
 
     df = pd.read_csv(f_in)
 
-    columns_to_keep = ["__js_HISTORY", "__js_ANSWERS", "__js_TIME", "Q15", "Q20", "Q14", "Q13", "Q12", "Q8", "Finished", "Q3", "StartDate", "EndDate", "Q57"]
+    columns_to_keep = ["__js_HISTORY", "__js_ANSWERS", "__js_CONFIDENCES", "__js_NUM_INCORRECT", "__js_TIME", "Q15", "Q20", "Q14", "Q13", "Q12", "Q8", "Finished", "Q3", "StartDate", "EndDate"]
 
     rename_map = {"__js_HISTORY": "drawings",
                     "__js_ANSWERS": "answers",
+                    "__js_CONFIDENCES": "confidence",
+                    "__js_NUM_INCORRECT": "num_incorrect",
                     "__js_TIME": "time",
                     "Q15": "strategy",
                     "Q20": "overall_confidence",
@@ -21,8 +23,7 @@ def process_normal(f_in, f_out):
                     "Q13": "familiarity", 
                     "Q12": "age", 
                     "Q8": "gender",
-                    "Q3": "prolific_id",
-                    "Q57": "stress_familiarity"
+                    "Q3": "prolific_id"
                 }
 
     new_df = df[columns_to_keep].copy()
@@ -30,8 +31,20 @@ def process_normal(f_in, f_out):
     new_df.drop([0,1])
     new_df = new_df.iloc[2:].reset_index(drop=True)
 
+    # Remove entries that failed training
+    # print(len(new_df))
+    if exclude_failed_training:
+        new_df['num_incorrect'] = new_df['num_incorrect'].astype(int)
+        new_df = new_df[new_df['num_incorrect'] < 5]
+        new_df = new_df.reset_index(drop=True)
+    # print(len(new_df))
+
     # Remove duplicate entries from same participant
     new_df = new_df.drop_duplicates(subset='prolific_id', keep='first')
+
+    # Remove erroneous data if applicable
+    if '5cb749fda6fe0700189768a5' in new_df['prolific_id'].values:
+        new_df = new_df[new_df['prolific_id'] != '5cb749fda6fe0700189768a5']
 
     new_df = new_df.reset_index(drop=True)
 
@@ -47,6 +60,7 @@ def process_normal(f_in, f_out):
     
     
     new_df['answers'] = new_df['answers'].str.rstrip(';').str.split(';').apply(safe_convert_int)
+    new_df['confidence'] = new_df['confidence'].str.rstrip(';').str.split(';').apply(safe_convert_int)
     new_df['time'] = new_df['time'].str.rstrip(';').str.split(';').apply(safe_convert_float)
     # new_df['time'] = new_df['time'].str.lstrip(',').str.split(',').apply(safe_convert_float)
 
@@ -116,18 +130,10 @@ def process_normal(f_in, f_out):
     for index, row in new_df.iterrows():
         participants[row['prolific_id']] = []
         for answer, correct_answer in zip(row["answers"], row["correct_answers"]):
-            if correct_answer == 2:
-                participants[row['prolific_id']].append(-1)
-            elif correct_answer == 1:
-                if answer == 1:
-                    participants[row['prolific_id']].append(1)
-                else:
-                    participants[row['prolific_id']].append(0)
-            elif correct_answer == 3:
-                if answer == 2:
-                    participants[row['prolific_id']].append(1)
-                else:
-                    participants[row['prolific_id']].append(0)
+            if answer == correct_answer:
+                participants[row['prolific_id']].append(1)
+            else:
+                participants[row['prolific_id']].append(0)
 
 
     new_df['accuracy'] = new_df['prolific_id'].map(participants)
@@ -152,13 +158,28 @@ def form_of_the_data(df, output_file):
             if answer == 1:
                 participants[index].append("left")
             elif answer == 2:
+                participants[index].append("same")
+            elif answer == 3:
                 participants[index].append("right")
             else:
-                print("error: unknown answer")
+                print("error: unkown answer")
 
     # df['answers_text'] = df['prolific_id'].map(participants)
     df['answers_text'] = df.index.map(participants)
 
+    participants = {}
+    for index, row in df.iterrows():
+        participants[index] = []
+        for answer in row["confidence"]:
+            if answer == 1:
+                participants[index].append("confident")
+            elif answer == 2:
+                participants[index].append("not confident")
+            else:
+                print("error: unkown answer")
+
+    # df['confidence_text'] = df['prolific_id'].map(participants)
+    df['confidence_text'] = df.index.map(participants)
 
     with open(output_file, "w") as f_out:
         # header_1 = "graph,g1,g1,g1,g1,g1,g1,g1,g1,g1,g2,g2,g2,g2,g2,g2,g2,g2,g2,g3,g3,g3,g3,g3,g3,g3,g3,g3,g4,g4,g4,g4,g4,g4,g4,g4,g4,g5,g5,g5,g5,g5,g5,g5,g5,g5\n"
@@ -203,8 +224,13 @@ def form_of_the_data(df, output_file):
             line = f"p{i+1} time,{','.join(sorted_new_list)}\n"
             f_out.writelines(line)
 
+            new_list = row['confidence']
+            # new_list = row['confidence_text']
+            sorted_new_list = [str(new_list[i]) for i in original_indices]
+            line = f"p{i+1} confidence,{','.join(sorted_new_list)}\n\n"
+            f_out.writelines(line)
             
-def form_demographic(df, output_file):
+def form_deomgraphic(df, output_file):
 
     # with open(output_file, "w") as f_out:
     #     header = "participant;strategy;overall_confidence;difficulty;familiarity;age;gender\n"
@@ -217,8 +243,7 @@ def form_demographic(df, output_file):
     # df = df.drop(columns=[col for col in df.columns if col not in columns_to_keep])
     # df['participant'] = ["p" + str(i + 1) for i in df.index]
 
-    # columns_to_keep = ["participant","name","strategy","overall_confidence","difficulty","familiarity","age","gender", "stress_familiarity"]
-    columns_to_keep = ["participant","strategy","overall_confidence","difficulty","familiarity","age","gender", "stress_familiarity"]
+    columns_to_keep = ["participant","name","strategy","overall_confidence","difficulty","familiarity","age","gender"]
     df = df.drop(columns=[col for col in df.columns if col not in columns_to_keep])
     df['participant'] = ["p" + str(i + 1) for i in df.index]
 
@@ -262,11 +287,11 @@ def process_expert(f_in, f_out):
     new_df.drop([0,1])
     new_df = new_df.iloc[2:].reset_index(drop=True)
 
-    # print(len(new_df))
-    # quit()
+    print(len(new_df))
+    quit()
 
     # print(len(new_df))
-    new_df = new_df[new_df['Finished'] == '1']
+    new_df = new_df[new_df['Finished'] == 'True']
     # print(len(new_df))
     # quit()
     # Remove entries that failed training
@@ -354,7 +379,6 @@ def process_expert(f_in, f_out):
         num2 = int(match2.group(1))
         
         # Calculate and return the absolute difference
-        # return abs(num1 - num2)
         return num1, num2, abs(num1 - num2)
     
 
@@ -366,8 +390,7 @@ def process_expert(f_in, f_out):
         tuple_list = []
         for pair in pairs:
             pair_list = pair.split(",")
-            # delta = get_delta(pair_list)
-            drawing_1, drawing_2, delta = get_delta(pair_list)
+            delta = get_delta(pair_list)
             pair_list.append(delta)
             tuple_list.append(pair_list)
 
@@ -453,17 +476,17 @@ def process_expert(f_in, f_out):
 
     
 
-    # for n in [10, 25, 50]:
-    #     columns_to_keep = [f"drawings{n}", f"answers{n}", f"confidence{n}",  f"time{n}", f"accuracy{n}",
-    #                         "num_incorrect", "strategy", "overall_confidence", "difficulty", "familiarity", "age", "gender", "name"]
+    for n in [10, 25, 50]:
+        columns_to_keep = [f"drawings{n}", f"answers{n}", f"confidence{n}",  f"time{n}", f"accuracy{n}",
+                            "num_incorrect", "strategy", "overall_confidence", "difficulty", "familiarity", "age", "gender", "name"]
 
-    #     rename_map = {f"drawings{n}":"drawings", f"answers{n}":"answers", f"confidence{n}":"confidence",  f"time{n}":"time", f"accuracy{n}":"accuracy"}
+        rename_map = {f"drawings{n}":"drawings", f"answers{n}":"answers", f"confidence{n}":"confidence",  f"time{n}":"time", f"accuracy{n}":"accuracy"}
 
-    #     sub_df = new_df[columns_to_keep].copy()
-    #     sub_df.rename(columns=rename_map, inplace=True)
+        sub_df = new_df[columns_to_keep].copy()
+        sub_df.rename(columns=rename_map, inplace=True)
 
-    #     form_of_the_data(sub_df, f"processed_data\\expert{n}_formatted.csv")
-    # form_deomgraphic(sub_df, f"processed_data\\expert_demographics.csv")
+        form_of_the_data(sub_df, f"processed_data\\expert{n}_formatted.csv")
+    form_deomgraphic(sub_df, f"processed_data\\expert_demographics.csv")
     # df10.to_csv("tentest.csv")
 
     new_df.to_csv(f_out)
@@ -519,6 +542,135 @@ def count_correct_by_delta(df):
     plt.show()
 
 
+def count_confidence_by_delta(df):
+
+    participants = {}
+
+    for index, row in df.iterrows():
+        participants[row['prolific_id']] = []
+        for answer, correct_answer in zip(row["answers"], row["correct_answers"]):
+            if answer == correct_answer:
+                participants[row['prolific_id']].append(1)
+            else:
+                participants[row['prolific_id']].append(0)
+
+
+    df['accuracy'] = df['prolific_id'].map(participants)
+
+    deltas = list(range(0, 45, 5))
+    delta_confident = {}
+    delta_not_confident = {}
+    num_for_each_delta = {}
+    for delta in deltas:
+        delta_confident[delta] = 0
+        delta_not_confident[delta] = 0
+        num_for_each_delta[delta] = 0
+
+
+
+    total = 0
+    for index, row in df.iterrows():
+        for answer, delta in zip(row["confidence"], row["deltas"]):
+            num_for_each_delta[delta] += 1
+            if answer == 1:
+                total += 1
+                delta_confident[delta] += 1
+            else:
+                total += 1
+                delta_not_confident[delta] += 1
+
+    for delta in deltas:
+        delta_confident[delta] = delta_confident[delta] / len(df)
+        delta_not_confident[delta] = delta_not_confident[delta] / len(df)
+
+    print(len(df))
+    print(total)
+    print(num_for_each_delta)
+    print(delta_confident)
+    print(delta_not_confident)
+    # labels = deltas
+    # confident_values = [delta_confident[delta] for delta in deltas]
+    # not_confident_values = [delta_not_confident[delta] for delta in deltas]
+
+    # x = np.arange(len(labels))  # the label locations
+    # width = 0.35  # the width of the bars
+
+    # fig, ax = plt.subplots()
+    # rects1 = ax.bar(x - width/2, confident_values, width, label='Confident')
+    # rects2 = ax.bar(x + width/2, not_confident_values, width, label='Not Confident')
+
+    # # Add some text for labels, title and custom x-axis tick labels, etc.
+    # ax.set_xlabel('Deltas')
+    # ax.set_ylabel('Values')
+    # ax.set_title('Values by delta and confidence')
+    # ax.set_xticks(x)
+    # ax.set_xticklabels(labels)
+    # ax.legend()
+
+    # fig.tight_layout()
+
+    # plt.show()
+    fig = go.Figure()
+
+    fig.add_trace(go.Bar(
+        x=deltas,
+        y=[delta_confident[delta] for delta in deltas],
+        name='Confident',
+        marker_color='blue'
+    ))
+
+    fig.add_trace(go.Bar(
+        x=deltas,
+        y=[delta_not_confident[delta] for delta in deltas],
+        name='Not Confident',
+        marker_color='red'
+    ))
+
+    # Customize layout
+    fig.update_layout(
+        title='Values by Delta and Confidence',
+        xaxis=dict(
+            title='Deltas'
+        ),
+        yaxis=dict(
+            title='Values'
+        ),
+        barmode='group'
+    )
+
+    fig.show()
+
+def count_total_correct_with_confidence(df):
+    participants_confident = {}
+    participants_not_confident = {}
+
+    for index, row in df.iterrows():
+        participants_confident[row['prolific_id']] = []
+        participants_not_confident[row['prolific_id']] = []
+        for answer, correct_answer, confidence in zip(row["answers"], row["correct_answers"], row["confidence"]):
+            if confidence == 1:
+                if answer == correct_answer:
+                    participants_confident[row['prolific_id']].append(1)
+                else:
+                    participants_confident[row['prolific_id']].append(0)
+            else:
+                if answer == correct_answer:
+                    participants_not_confident[row['prolific_id']].append(1)
+                else:
+                    participants_not_confident[row['prolific_id']].append(0)
+
+
+    df['accuracy_confident'] = df['prolific_id'].map(participants_confident)
+    df['total_correct_confident'] = df['accuracy_confident'].apply(lambda x: sum(x))
+
+    df['accuracy_not_confident'] = df['prolific_id'].map(participants_not_confident)
+    df['total_correct_not_confident'] = df['accuracy_not_confident'].apply(lambda x: sum(x))
+
+    # for participant, accuracy in participants.items():
+    #     print(f"{sum(accuracy)}/45")
+    print(df['total_correct_confident'].mean())
+    print(df['total_correct_not_confident'].mean())
+
 def count_total_correct(df):
     participants = {}
 
@@ -571,19 +723,57 @@ def check_complete(df):
                 print(row['prolific_id'])
             # print(row['prolific_id'], row['num_incorrect'])
 
+
+def fix_nt50():
+
+    # df = pd.read_csv("n50-nt-final.csv")
+
+    # selected_columns = df.filter(regex=r'^\d+_Main loop$')
+    # selected_columns = df[['Q3']].join(selected_columns)
+
+    # # Create a new DataFrame with these selected columns
+    # new_df = selected_columns.copy()
+
+    # df = new_df.iloc[[0,10]]
+
+
+
+    # df.to_csv("50nt_test.csv")
+
+    df = pd.read_csv("50nt_test1.csv")
+
+    actual_responses = []
+    for index, row in df.iterrows():
+        if row['5cb749fda6fe0700189768a5'] == 'The drawing on the left has lower stress':
+            actual_responses.append(1)
+        elif row['5cb749fda6fe0700189768a5'] == 'The drawings have the same stress':
+            actual_responses.append(2)
+        elif row['5cb749fda6fe0700189768a5'] == 'The drawing on the right has lower stress':
+            actual_responses.append(3)
+    
+    # print(len(actual_responses))
+    close = [3,3,2,3,3,1,1,3,3,2,1,1,3,1,1,3,1,1,1,1,3,2,1,1,2,3,1,2,1,1,1,1,1,3,3,3,2,3,3,3,1,2,1,1]
+    print(len(actual_responses), actual_responses)
+    print(len(close), close)
+
+    return actual_responses
+
+
 def count_failed(df):
     df['num_incorrect'] = df['num_incorrect'].astype(int)
     return df[df['num_incorrect'] >= 5].shape[0]
 
 
-def main():
+def count_correct(df):
+    print(sum(df.iloc[27]['accuracy']))
+    
 
-    f_in = "raw_Data/stress_expert.csv"
+def main():
+    f_in = "raw_Data/stress10.csv"
+
     f_out = f_in[0:-4] + "-cleaned.csv"
-    # there are some odd points in n50 data set - one particiapnt says "they see nothing", another has 46 trials instead of 45
-    # df = process_normal(f_in, f_out)
-    df = process_expert(f_in, f_out)
-    # form_demographic(df, f_in[0:-4] + "-demographics.csv")
+
+    df = process_normal(f_in, f_out, False)
 
 
 
